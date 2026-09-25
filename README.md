@@ -84,6 +84,9 @@ cd <本仓库目录>
 | `Install-PowerTuneTask.ps1` | 计划任务：登录应用 / 插拔电源自适应 |
 | `_ref\Test-PwrApi.ps1` | 可写性探测工具，换机器时重跑它刷新白名单 |
 | `_ref\writable-test.csv` | 26 项可写 / 3 项只读 / 1 项不可读 的实测记录 |
+| `_ref\processor-settings.csv` | 处理器电源管理子组下全部 95 项设置清单 |
+| `_ref\Push-ViaApi.ps1` | 备用上传通路（`github.com:443` 被屏蔽时走 REST 对象 API） |
+| `vendor\PowerSettingsExplorer.zip` | 第三方工具归档，仅供溯源；说明见 `vendor\NOTICE.md` |
 
 ## 换到别的机器
 
@@ -147,8 +150,9 @@ PowerReadDefaultACIndex   PowerReadDefaultDCIndex  PowerDeterminePlatformRole
 - `SchemeTypes{ scheme, overlay, profile }`、`RegType`（含 `REG_QWORD`）
 - 支持 `ExportSettings` / `ImportSettings` / `SaveSettingsAsSctipt` / `WriteToBatchFile`
 
-本项目只借鉴其 API 调用方式与 GUID 语义，**未包含也未分发该工具的二进制文件**。
-需要图形界面请自行获取原工具。
+本项目只借鉴其 API 调用方式与 GUID 语义，代码为自行实现。原始归档放在
+`vendor\PowerSettingsExplorer.zip` 供溯源（含 SHA256 与来源说明，见 `vendor\NOTICE.md`）；
+该归档内未附许可文件，本仓库不因此授予任何再分发许可。
 
 ## 许可
 
