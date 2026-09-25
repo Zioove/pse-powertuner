@@ -1,0 +1,6 @@
+# 第三方工具二进制（不随本项目分发，见 README「第三方组件」）
+_ref/PowerSettingsExplorer.exe
+
+# 运行时产物
+*.log
+*.tmp
