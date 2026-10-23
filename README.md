@@ -1,8 +1,11 @@
 # PSE-PowerTuner
 
-基于 **PowerSettingsExplorer** 逆向出的隐藏电源设置 GUID 表，把处理器性能相关的 26 项
+基于 **PowerSettingsExplorer** 逆向出的隐藏电源设置 GUID 表，把处理器性能相关的 27 项
 设置自动调成三档场景。核心不是"调用 powercfg"，而是**直接调用 `powrprof.dll`**——
 这是 PowerSettingsExplorer 的做法，也是本机能生效的唯一路径。
+
+**要求**：Windows 10/11 · 管理员权限（`-List` / `-Detect` / `-Diff` 除外）· PowerShell 7
+或 Windows PowerShell 5.1（脚本已带 UTF-8 BOM，5.1 可直接解析）。
 
 | 档位 | Key | 基底方案 | 适用 |
 |---|---|---|---|
@@ -41,34 +44,57 @@ cd <本仓库目录>
 .\Apply-PowerProfile.ps1 -Profile max-perf -IncludeDC           # 5. 正式应用
 ```
 
-任何正式应用前都会全量备份到 `%ProgramData%\PSE-PowerTuner\backup\<时间戳>-<标签>\`，
-包含每个方案的 `.pow`、`manifest.json`，以及 `values.json`（**原生 API 逐项快照，还原的唯一可靠依据**）。
+任何正式应用前都会备份到 `%ProgramData%\PSE-PowerTuner\backup\<时间戳>-<标签>\`，包含：
+
+- `*.pow` — 每个方案导出（**装不下隐藏项**，不能单独用来还原）
+- `values.json` — 原生 API 逐项快照，**还原设置值的唯一可靠依据**
+- `attributes.json` — 每项设置的隐藏位快照（`PowerWriteSettingAttributes` 改的是全局注册表，必须单独还原）
+- `manifest.json` — 备份元信息与当时的激活方案
 
 ## 三档差异（AC 交流档）
 
-| 设置 | 稳定本 | 极致版 | 节能版 |
-|---|---|---|---|
-| `PERFBOOSTMODE` 性能提升模式 | 2 激进 | 2 激进 | 1 启用 |
-| `PERFEPP` 能效偏好 | 50 | **0 纯性能** | 80 |
-| `CPMINCORES` 最小停放核心% | 25 | **100 禁止停放** | 50 |
-| `PROCTHROTTLEMIN` 最小处理器状态% | 5 | **100 锁高频** | 5 |
-| `PROCTHROTTLEMAX` 最大处理器状态% | 100 | 100 | 85 |
-| `PERFINCPOL` 升频策略 | 0 保守 | **2 常时** | 0 保守 |
-| `PERFINCTHRESHOLD` / `PERFDECTHRESHOLD` | 60 / 20 | **20 / 60** | 60 / 20 |
-| `PERFLATENCYSENSITIVITY` 延迟敏感度 | 50 | **100** | 0 |
-| `PERFHETERO` 异构调度 | 4 优先P核 | 4 优先P核 | 0 自动 |
-| `IDLEDISABLE` 空闲禁用（DC） | 0 | — | 1 |
+数值对照本机出厂方案（`平衡` / `高性能` / `节能`）实测校准，不是按「数字越大越强」填的。
+
+| 设置 | 稳定本 | 极致版 | 节能版 | 出厂(平衡) |
+|---|---|---|---|---|
+| `PERFBOOSTMODE` 性能提升模式 | 2 激进 | 2 激进 | 1 启用 | 2 |
+| `PERFBOOSTPOL` 睿频余量% | 60 | **100** | 0 | 60 |
+| `PERFEPP` 能效偏好 | 33 | **0 纯性能** | 80 | 33 |
+| `CPMINCORES` 最小解停核心% | 25 | **100 禁止停放** | 50 | 100 |
+| `PROCTHROTTLEMIN` 最小处理器状态% | 5 | **50** | 5 | 5 |
+| `PROCTHROTTLEMAX` 最大处理器状态% | 100 | 100 | 85 | 100 |
+| `PERFINCPOL` 升频策略 | 0 Ideal | **2 Rocket** | 1 Single | 0 |
+| `PERFDECPOL` 降频策略 | 0 Ideal | 0 Ideal | 2 Rocket | 0 |
+| `PERFINCTHRESHOLD` / `PERFDECTHRESHOLD` | 60 / 20 | **30 / 10** | 60 / 20 | 60 / 20 |
+| `PERFLATENCYSENSITIVITY` 延迟敏感度 | 99 | **100** | 0 | 99 |
+| `PERFHETERO` 异类策略选择 | 4 | 4 | 4 | 4 |
+| `HETEROSCHED` 异构线程调度 | 5 自动 | **2 优先性能核** | 5 自动 | 5 |
+| `PERFAUTONOMOUS` 自主模式 | 1 | 1 | 1 | 1 |
+| `SYSCOOLING` 散热策略 | 1 主动 | 1 主动 | 0 被动 | 1 |
+| `IDLEDISABLE` 空闲禁用 | 0 | 0 | 0 | 0 |
+
+**几个容易填反的语义**（本项目早期版本就踩过）：
+
+- `PERFBOOSTPOL` 是「允许超过最大频率的百分比」，**填 2 等于关掉睿频**，不是「更激进」。
+- `CPHEADROOM` 是「所有核心忙到多少才解停下一个核」，**越大越难解停**；`CPMAXCORES` 是「最大解停数」，100 = 不限制，不是「最大停放」。
+- `PERFINCTHRESHOLD` 必须 **大于** `PERFDECTHRESHOLD`，反过来会让状态机每个检查周期振荡。
+- `IDLEDISABLE=1` 是「**禁止**空闲」，节能档绝不能开。
+- `PERFHETERO` 只是「选用第几号异类策略」，真正的线程放置开关是 `HETEROSCHED`。
 
 电池档（DC）是独立的一套更保守参数，需加 `-IncludeDC` 才写入。
 
 ## 本机实测验证结果
 
-34 项候选设置经「读 → 写 → 回读 → 还原」往返验证：
+33 项候选设置经「读 → 写 → 回读 → 还原」往返验证：
 
-- **26 项可读可写** → 全部编入三档配置
+- **30 项可读可写**，其中 **27 项编入三档配置**
 - **3 项只读**（`PERFINCTIME` / `PERFDECTIME` / `PERFTIME`，写入被拒）
-- **1 项不可读**（`93b8b6dc-…` 异构线程调度，rc=2）
-- 极致版演练：**47 项写入全部通过，0 失败**；节能版：**41 项，0 失败**
+- 可写但暂未编入：`IDLEPROMOTE` / `IDLEDEMOTE` / `IDLEMAX`（空闲阈值，待实测收益后再纳入）
+- 极致版 AC+DC 共 **54 项**、节能版 **46 项**
+
+> 早期版本此处写「26 项可读可写 / 1 项不可读」，是探测脚本把 `HETEROSCHED` 的 GUID
+> 误写成 `93b8b6dc-0688`/`-0668`（真值 `-0698`）导致的假结论。该设置实际可读可写，
+> 已修正并纳入白名单。
 
 原始数据：`_ref\writable-test.csv`、`_ref\processor-settings.csv`（95 项完整清单）。
 

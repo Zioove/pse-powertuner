@@ -1,10 +1,25 @@
 # 统一行尾，避免跨平台 clone 后出现整文件 diff
 * text=auto eol=lf
 
+# PowerShell 脚本必须保持 UTF-8 BOM（Windows PowerShell 5.1 会按 ANSI/GBK
+# 解码无 BOM 文件，导致中文字符串变乱码并报语法错误）。BOM 由文件本身携带，
+# 这里只锁定行尾，不要加 charset 以免 git 归一化时改动字节。
 *.ps1   text eol=lf
 *.psm1  text eol=lf
+*.psd1  text eol=lf
 *.md    text eol=lf
-*.csv   text eol=lf
 
+# CSV 允许 CRLF：Excel 与部分工具对 LF 兼容性差，且历史文件已是 CRLF。
+*.csv   text eol=crlf
+
+# 二进制：必须显式声明，否则 text=auto 可能对 zip 误判并损坏文件
 *.exe   binary
+*.dll   binary
+*.zip   binary
+*.7z    binary
 *.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary

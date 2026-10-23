@@ -1,4 +1,4 @@
-# 探测验证：确认 powrprof 原生 API 的写入能力边界
+﻿# 探测验证：确认 powrprof 原生 API 的写入能力边界
 # 目的：为三档脚本确定「本机真实可写」的设置集合
 $ErrorActionPreference = 'Stop'
 
@@ -52,7 +52,11 @@ Add-Type -TypeDefinition $src -ErrorAction Stop
 
 $PROC = [Guid]'54533251-82be-4824-96c1-47b60b740d00'
 $scheme = [PwrApi]::Active()
-Write-Host "激活方案: $scheme`n" -ForegroundColor Cyan
+Write-Host "激活方案: $scheme" -ForegroundColor Cyan
+Write-Host "警告：本脚本会对**当前激活方案**写入探测值再还原。" -ForegroundColor Yellow
+Write-Host "      如果中途被打断，某项设置可能停留在探测值上。" -ForegroundColor Yellow
+Write-Host "      建议先备份: .\Apply-PowerProfile.ps1 -Detect 查看，或用" -ForegroundColor Yellow
+Write-Host "      .\Rollback-PowerScheme.ps1 确认已有备份后再运行。`n" -ForegroundColor Yellow
 
 # 待测设置表：名称 -> GUID
 $table = [ordered]@{
@@ -88,8 +92,7 @@ $table = [ordered]@{
   IDLEDEMOTE           = '4b92d758-5a24-4851-a470-815d78aee119'
   IDLEMAX              = '9943e905-9a30-4ec1-9b99-44dd3b76f7a2'
   PERFRESOURCEPRIORITY = '603fe9ce-8d01-4b48-a968-1d706c28fd5c'
-  HETEROSCHED          = '93b8b6dc-0688-4d1c-9ee4-0644e900c85d'
-  HETEROSCHED2         = '93b8b6dc-0668-4d1c-9ee4-0644e900c85d'
+  HETEROSCHED          = '93b8b6dc-0698-4d1c-9ee4-0644e900c85d'   # 异构线程调度（真 GUID；曾误写为 0688/0668 导致“不可读”假结论）
 }
 
 Write-Host "=== 逐项测试（读 → 写 → 回读）===" -ForegroundColor Cyan

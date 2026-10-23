@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PowerSettingsExplorer 性能自动调整 —— 一键入口（稳定本 / 极致版 / 节能版）
 .DESCRIPTION
@@ -145,25 +145,40 @@ if ($DryRun) {
         'eco'      { 'a1841308-3541-4fab-bc81-f71556f20b4a' }
         default    { '381b4222-f694-41f0-9685-ff5bb260df2e' }
     }
-    $tmp = New-PowerScheme -FriendlyName 'PSE-DRYRUN-TEMP' -BaseGuid $base
+    # 唯一名称，避免复用上次残留的脏方案
+    $tmpName = "PSE-DRYRUN-$(Get-Random -Maximum 99999)"
+    $tmp = New-PowerScheme -FriendlyName $tmpName -BaseGuid $base
 
-    $ok = 0; $bad = @()
-    foreach ($n in ($p.AC.Keys | Sort-Object)) {
-        if (Set-Value -Name $n -Value ([int]$p.AC[$n]) -Scope 'AC' -SchemeGuid $tmp) { $ok++ }
-        else { $bad += $n }
-    }
-    if ($IncludeDC) {
-        foreach ($n in ($p.DC.Keys | Sort-Object)) {
-            if (Set-Value -Name $n -Value ([int]$p.DC[$n]) -Scope 'DC' -SchemeGuid $tmp) { $ok++ }
-            else { $bad += "$n(DC)" }
+    try {
+        # 与正式路径保持一致：正式 Apply 会先取消隐藏，演练也必须做，
+        # 否则有些设置只在取消隐藏后可写，演练结果会偏乐观。
+        Enable-HiddenSettings
+
+        $ok = 0; $bad = @(); $gated = @()
+        foreach ($n in ($p.AC.Keys | Sort-Object)) {
+            if ((Get-WritableSettings) -notcontains $n) { $gated += $n; continue }
+            if (Set-Value -Name $n -Value ([int]$p.AC[$n]) -Scope 'AC' -SchemeGuid $tmp) { $ok++ }
+            else { $bad += $n }
         }
+        if ($IncludeDC) {
+            foreach ($n in ($p.DC.Keys | Sort-Object)) {
+                if ((Get-WritableSettings) -notcontains $n) { $gated += "$n(DC)"; continue }
+                if (Set-Value -Name $n -Value ([int]$p.DC[$n]) -Scope 'DC' -SchemeGuid $tmp) { $ok++ }
+                else { $bad += "$n(DC)" }
+            }
+        }
+
+        Write-Host "`n写入并回读校验通过 $ok 项；失败 $(@($bad).Count) 项；跳过 $(@($gated).Count) 项。" -ForegroundColor Green
+        if (@($bad).Count)   { Write-Host "失败: $($bad -join ', ')" -ForegroundColor Yellow }
+        if (@($gated).Count) { Write-Host "跳过（未通过可写性验证）: $($gated -join ', ')" -ForegroundColor DarkGray }
     }
-
-    Write-Host "`n写入并回读校验通过 $ok 项；失败 $(@($bad).Count) 项。" -ForegroundColor Green
-    if (@($bad).Count) { Write-Host "失败: $($bad -join ', ')" -ForegroundColor DarkGray }
-
-    Invoke-PowerCfg -Arguments @('/delete', $tmp) | Out-Null
-    Write-Host "已删除临时方案 $tmp，系统状态未改变。" -ForegroundColor Green
+    finally {
+        # 无论成功、失败还是 Ctrl-C，临时方案都必须删掉
+        $d = Invoke-PowerCfg -Arguments @('/delete', $tmp)
+        if ($d.Ok) { Write-Host "`n已删除临时方案 $tmp，系统电源方案未改变。" -ForegroundColor Green }
+        else       { Write-Host "`n临时方案删除失败（$($d.Output)），请手动执行: powercfg /delete $tmp" -ForegroundColor Red }
+    }
+    Write-Host '注意：演练仍会创建 %ProgramData%\PSE-PowerTuner 目录并写日志。' -ForegroundColor DarkGray
     exit 0
 }
 
@@ -172,6 +187,9 @@ if ($RestoreFrom) {
     $n = Import-PowerSnapshot -BackupDir $RestoreFrom
     if (Test-Path (Join-Path $RestoreFrom 'values.json')) {
         Restore-SnapshotValues -BackupDir $RestoreFrom | Out-Null
+    }
+    if (Test-Path (Join-Path $RestoreFrom 'attributes.json')) {
+        Restore-SnapshotAttributes -BackupDir $RestoreFrom | Out-Null
     }
     $mf = Join-Path $RestoreFrom 'manifest.json'
     if (Test-Path $mf) {
@@ -192,24 +210,30 @@ if ($Restore) {
     exit 0
 }
 
-$result = Apply-Profile -ProfileKey $resolved `
+$result = Set-PowerProfile -ProfileKey $resolved `
                         -IncludeDC:$IncludeDC `
                         -NoActivate:$NoActivate `
                         -SkipBackup:$SkipBackup
 
 # ── 生效核验 ──
+# 注意：必须按刚写入的方案 GUID 读取。Get-Value 不带 -SchemeGuid 时会回退到
+# “当前激活方案”，在 -NoActivate 的情况下那还是旧方案，会打印出旧值。
 Write-Host '═══ 生效核验 ═══' -ForegroundColor Cyan
 $act = Get-ActiveScheme
 Write-Host ('  激活方案: {0}  ({1})' -f (Get-SchemeList)[$act], $act)
+if ($NoActivate -or $act -ne $result.SchemeGuid) {
+    Write-Host ('  目标方案: {0}  ({1})  ← 未激活，以下为其内部值' -f (Get-SchemeList)[$result.SchemeGuid], $result.SchemeGuid) -ForegroundColor DarkGray
+}
 
-foreach ($n in @('PERFBOOSTMODE','PERFEPP','CPMINCORES','PROCTHROTTLEMIN',
-                 'PROCTHROTTLEMAX','PERFHETERO','PERFINCPOL','PERFLATENCYSENSITIVITY')) {
-    $v = Get-Value -Name $n
+foreach ($n in @('PERFBOOSTMODE','PERFBOOSTPOL','PERFEPP','CPMINCORES',
+                 'PROCTHROTTLEMIN','PROCTHROTTLEMAX','PERFHETERO','HETEROSCHED',
+                 'PERFINCPOL','PERFINCTHRESHOLD','PERFDECTHRESHOLD','PERFLATENCYSENSITIVITY')) {
+    $v = Get-Value -Name $n -SchemeGuid $result.SchemeGuid
     if ($null -ne $v.AC) {
         $dcTxt = if ($null -ne $v.DC) { $v.DC } else { '—' }
-        Write-Host ('  {0,-22} AC={1,-5} DC={2}' -f $n, $v.AC, $dcTxt)
+        Write-Host ('  {0,-24} AC={1,-5} DC={2}' -f $n, $v.AC, $dcTxt)
     } else {
-        Write-Host ('  {0,-22} 本机不支持' -f $n) -ForegroundColor DarkGray
+        Write-Host ('  {0,-24} 本机不支持' -f $n) -ForegroundColor DarkGray
     }
 }
 

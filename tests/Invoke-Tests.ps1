@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Self-contained test runner for PSE-PowerTuner. No Pester, no network, no
     third-party modules.
@@ -564,7 +564,8 @@ Invoke-Case -Id 'S05' -Category 'static' -Name 'Module exports exactly the inten
         'Get-HardwareProfile', 'Resolve-Profile', 'Get-SchemeList', 'Get-ActiveScheme',
         'Find-SchemeByName', 'New-PowerScheme', 'Set-ActiveScheme', 'Enable-HiddenSettings',
         'Export-PowerSnapshot', 'Import-PowerSnapshot', 'Restore-SnapshotValues',
-        'Restore-PowerDefaults', 'Get-ProfileDiff', 'Apply-Profile'
+        'Restore-SnapshotAttributes',
+        'Restore-PowerDefaults', 'Get-ProfileDiff', 'Set-PowerProfile'
     )
     $actual = @(Get-Command -Module $script:Module -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandType -eq 'Function' } | ForEach-Object { $_.Name } | Sort-Object)
@@ -1010,16 +1011,21 @@ Invoke-Case -Id 'S19' -Category 'static' -Name 'README numeric claims match the 
         $findings += ("README 声称 {0} 项候选设置，writable-test.csv 实有 {1} 行" -f $claimCandidates, $script:RefWritable.Count)
     }
 
-    # "**26 项可读可写**"
+    # "**30 项可读可写**" —— 这是 CSV 里实测可读可写的总数
     $claimWritable = Read-ClaimInt '\*\*(\d+)\s*项可读可写\*\*'
     if ($null -ne $claimWritable) {
         if ($claimWritable -ne $csvWritable.Count) {
             $findings += ("README 声称 {0} 项可读可写，writable-test.csv 标记可写的有 {1} 项" -f $claimWritable, $csvWritable.Count)
         }
-        if ($claimWritable -ne $script:Writable.Count) {
-            $findings += ("README 声称 {0} 项可读可写，模块 `$Script:Writable 有 {1} 项" -f $claimWritable, $script:Writable.Count)
-        }
     } else { $notes += 'README: "N 项可读可写" claim not found' }
+
+    # "其中 **27 项编入三档配置**" —— 这是白名单条数，和上一个是不同的数
+    $claimInProfiles = Read-ClaimInt '其中\s*\*\*(\d+)\s*项编入三档配置\*\*'
+    if ($null -ne $claimInProfiles) {
+        if ($claimInProfiles -ne $script:Writable.Count) {
+            $findings += ("README 声称 {0} 项编入三档配置，模块 `$Script:Writable 有 {1} 项" -f $claimInProfiles, $script:Writable.Count)
+        }
+    } else { $notes += 'README: "N 项编入三档配置" claim not found' }
 
     # "**3 项只读**"
     $claimReadOnly = Read-ClaimInt '\*\*(\d+)\s*项只读\*\*'

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     回滚电源方案：从备份导入，或恢复 Windows 默认值
 .EXAMPLE
@@ -12,7 +12,8 @@ param(
     [switch]$List,
     [int]$Index = 1,
     [string]$BackupDir,
-    [switch]$Defaults
+    [switch]$Defaults,
+    [switch]$RemoveClones      # 删除 PSE-Stable/PSE-Extreme/PSE-Eco 等克隆方案
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,20 @@ if ($Defaults) {
     exit 0
 }
 
+if ($RemoveClones) {
+    # 只删本工具克隆出来的方案，且不删当前激活的
+    $active = Get-ActiveScheme
+    $targets = @((Get-SchemeList).GetEnumerator() |
+                 Where-Object { $_.Value -match '^PSE-(Stable|Extreme|Eco|DRYRUN)' -and $_.Key -ne $active })
+    if ($targets.Count -eq 0) { Write-Host '没有可删除的克隆方案。' -ForegroundColor DarkGray; exit 0 }
+    foreach ($t in $targets) {
+        $r = Invoke-PowerCfg -Arguments @('/delete', $t.Key)
+        if ($r.Ok) { Write-Host "已删除 $($t.Value) ($($t.Key))" -ForegroundColor Green }
+        else       { Write-Host "删除失败 $($t.Value): $($r.Output)" -ForegroundColor Yellow }
+    }
+    exit 0
+}
+
 if ($BackupDir) {
     $target = $BackupDir
 } else {
@@ -62,6 +77,11 @@ if ($BackupDir) {
 Write-Host "回滚来源: $target" -ForegroundColor Cyan
 $n = Import-PowerSnapshot -BackupDir $target
 
+# .pow 导入装不下隐藏项（powercfg 在本机只暴露 95 项处理器设置里的 2 项），
+# 必须再用原生 API 按 values.json 逐项还原——这才是唯一可靠的还原依据。
+$v = Restore-SnapshotValues -BackupDir $target
+$a = Restore-SnapshotAttributes -BackupDir $target
+
 $mf = Join-Path $target 'manifest.json'
 if (Test-Path $mf) {
     $prev = (Get-Content $mf -Raw | ConvertFrom-Json).ActiveScheme
@@ -73,5 +93,5 @@ if (Test-Path $mf) {
     }
 }
 
-Write-Host "`n回滚完成，导入 $n 个方案。" -ForegroundColor Green
+Write-Host "`n回滚完成：导入 $n 个方案，还原 $v 项设置值，还原 $a 项隐藏属性。" -ForegroundColor Green
 (& powercfg.exe /getactivescheme) | ForEach-Object { Write-Host "  $_" }

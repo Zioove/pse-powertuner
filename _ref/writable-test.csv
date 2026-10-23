@@ -31,5 +31,4 @@
 "IDLEDEMOTE","4b92d758-5a24-4851-a470-815d78aee119","True","True","40","True"
 "IDLEMAX","9943e905-9a30-4ec1-9b99-44dd3b76f7a2","True","True","0","True"
 "PERFRESOURCEPRIORITY","603fe9ce-8d01-4b48-a968-1d706c28fd5c","True","True","100","True"
-"HETEROSCHED","93b8b6dc-0688-4d1c-9ee4-0644e900c85d","False","False","ERR2","False"
-"HETEROSCHED2","93b8b6dc-0668-4d1c-9ee4-0644e900c85d","False","False","ERR2","False"
+"HETEROSCHED","93b8b6dc-0698-4d1c-9ee4-0644e900c85d","True","True","5","False"

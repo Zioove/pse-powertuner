@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     生成电源配置报告：当前值 vs 三档目标值 + 基准测试历史 + 备份记录（HTML）
 .EXAMPLE
@@ -28,10 +28,10 @@ foreach ($p in @($pStable, $pMax, $pEco)) { $allNames += $p.AC.Keys }
 $allNames = $allNames | Sort-Object -Unique
 
 $rows = foreach ($a in $allNames) {
-    $cur = Get-PowerSettingValue -Name $a
+    $cur = Get-Value -Name $a
     [pscustomobject]@{
         Name    = $a
-        Desc    = $known[$a].Desc
+        Desc    = if ($known.Contains($a)) { $known[$a].Desc } else { '' }
         Current = if ($null -ne $cur.AC) { $cur.AC } else { $null }
         Stable  = $pStable.AC[$a]
         Extreme = $pMax.AC[$a]

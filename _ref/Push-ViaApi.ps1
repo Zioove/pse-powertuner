@@ -1,4 +1,4 @@
-# github.com:443 被网络屏蔽时，通过 REST 对象 API 上传本地仓库内容。
+﻿# github.com:443 被网络屏蔽时，通过 REST 对象 API 上传本地仓库内容。
 # 支持二进制文件（base64 编码），自动以远程当前 HEAD 为父节点追加新提交。
 # 用法：设置 $env:PSE_COMMIT_MSG 后运行；不设则用默认提交信息。
 $ErrorActionPreference = 'Stop'

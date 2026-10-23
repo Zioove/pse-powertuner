@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PowerSettingsExplorer 性能自动调整 —— 原生 API 公共库
 .DESCRIPTION
@@ -134,7 +134,7 @@ $Script:Settings = [ordered]@{
     CPMINCORES      = @{ Guid='0cc5b647-c1df-4637-891a-dec35c318583'; Group='PROCESSOR'
                          Desc='最小停放核心% 100=禁止停放'; V='验证' }
     CPMAXCORES      = @{ Guid='ea062031-0e34-4ff1-9b6d-eb1059334028'; Group='PROCESSOR'
-                         Desc='最大停放核心%'; V='验证' }
+                         Desc='最大解停核心% 100=不限制（注意：不是“最大停放”）'; V='验证' }
     CPCONCURRENCY   = @{ Guid='2430ab6f-a520-44a2-9601-f7f23b5134b1'; Group='PROCESSOR'
                          Desc='停放并发阈值'; V='验证' }
     CPHEADROOM      = @{ Guid='f735a673-2066-4f80-a0c5-ddee0cf1bf5d'; Group='PROCESSOR'
@@ -143,8 +143,12 @@ $Script:Settings = [ordered]@{
                          Desc='延迟提示最少解停核心数'; V='验证' }
 
     # ══ 异构调度（大小核）══
+    # 注：PERFHETERO 是“选用第几号异类策略”的选择器，不是“自动/优先P核”开关。
+    #     真正的线程放置开关是 HETEROSCHED(93b8b6dc-0698)，本机实测可读可写。
+    HETEROSCHED     = @{ Guid='93b8b6dc-0698-4d1c-9ee4-0644e900c85d'; Group='PROCESSOR'
+                         Desc='异构线程调度 0=All 1=仅性能核 2=优先性能核 3=仅能效核 4=优先能效核 5=自动'; V='验证' }
     PERFHETERO      = @{ Guid='7f2f5cfa-f10c-4823-b5e1-e93ae85f46b5'; Group='PROCESSOR'
-                         Desc='异构调度策略 0自动/4优先P核'; V='验证' }
+                         Desc='异构策略选择 0-4(选用异类策略0..4，4为多数平台出厂值)'; V='验证' }
     PERFAUTONOMOUS  = @{ Guid='8baa4a8a-14c6-4451-8e8b-14bdbd197537'; Group='PROCESSOR'
                          Desc='性能自主模式'; V='验证' }
 
@@ -158,9 +162,9 @@ $Script:Settings = [ordered]@{
     THROTTLEMAX_EC1 = @{ Guid='bc5038f7-23e0-4960-96da-33abaf5935ed'; Group='PROCESSOR'
                          Desc='最大处理器状态%（能效类1）'; V='验证' }
     PERFINCPOL      = @{ Guid='465e1f50-b610-473a-ab58-00d1077dc418'; Group='PROCESSOR'
-                         Desc='升频策略 0保守/1激进/2常时'; V='验证' }
+                         Desc='升频策略 0=Ideal 1=Single 2=Rocket 3=IdealAggressive'; V='验证' }
     PERFDECPOL      = @{ Guid='40fbefc7-2e9d-4d25-a185-0cfd8574bac6'; Group='PROCESSOR'
-                         Desc='降频策略 0保守/1激进'; V='验证' }
+                         Desc='降频策略 0=Ideal 1=Single 2=Rocket'; V='验证' }
     PERFINCTHRESHOLD= @{ Guid='06cadf0e-64ed-448a-8927-ce7bf90eb35d'; Group='PROCESSOR'
                          Desc='升频阈值'; V='验证' }
     PERFDECTHRESHOLD= @{ Guid='12a0ab44-fe28-4fa9-b3bd-4b64f44960a6'; Group='PROCESSOR'
@@ -189,15 +193,15 @@ $Script:Settings = [ordered]@{
                          Desc='降频时间（本机只读）'; V='只读' }
     PERFTIME        = @{ Guid='4d2b0152-7d5c-498b-88e2-34345392a2c5'; Group='PROCESSOR'
                          Desc='性能检查间隔（本机只读）'; V='只读' }
-    HETEROSCHED     = @{ Guid='93b8b6dc-0698-4d1c-9ee4-0644e900c85d'; Group='PROCESSOR'
-                         Desc='异构线程调度策略（本机不可读）'; V='不可用' }
 }
 
 # 本机可写白名单（来自 _ref\writable-test.csv 实测）
+# 注：Set-PowerProfile 会据此白名单跳过未验证项（见 Test-WritableGate）。
+#     IDLEPROMOTE / IDLEDEMOTE / IDLEMAX 实测可写但暂未纳入三档配置，故不在此列。
 $Script:Writable = @(
     'PERFBOOSTMODE','PERFBOOSTPOL','PERFEPP','PERFEPP1',
     'CPMINCORES','CPMAXCORES','CPCONCURRENCY','CPHEADROOM','CPLATENCYHINTUNPARK',
-    'PERFHETERO','PERFAUTONOMOUS',
+    'PERFHETERO','PERFAUTONOMOUS','HETEROSCHED',
     'PROCTHROTTLEMIN','PROCTHROTTLEMAX','THROTTLEMIN_EC1','THROTTLEMAX_EC1',
     'PERFINCPOL','PERFDECPOL','PERFINCTHRESHOLD','PERFDECTHRESHOLD',
     'PERFLATENCYSENSITIVITY','MAXFREQ',
@@ -207,30 +211,43 @@ $Script:Writable = @(
 #endregion
 
 #region ── 三档配置（数值语义取自本机实测取值范围） ────────────────────
+#
+# 数值全部对照本机出厂方案实测校准（PowerReadACValueIndex 读取
+# Balanced / HighPerformance / PowerSaver 三个内置方案），而不是按
+# “数字越大越强”的直觉填写——多数电源设置并不单调：
+#   · PERFBOOSTPOL 是“允许超过最大频率的百分比”，2 ≈ 关掉睿频
+#   · CPHEADROOM   是“全部核心忙到多少才解停一个核”，越大越难解停
+#   · PERFINCTHRESHOLD 必须 > PERFDECTHRESHOLD（DEC < INC 不变量）
+#   · IDLEDISABLE=1 是“禁止空闲”，节能档绝不能开
+# 出厂参考值见 README「出厂基准」一节。
 
 $Script:Profiles = @{
     'balanced-stable' = @{
         Title = '稳定本(日常/办公)'
         Clone = 'PSE-Stable'
         AC = @{
-            PERFBOOSTMODE='2'; PERFBOOSTPOL='2'; PERFEPP='50'; PERFEPP1='50'
+            PERFBOOSTMODE='2'; PERFBOOSTPOL='60'; PERFEPP='33'; PERFEPP1='33'
             CPMINCORES='25'; CPMAXCORES='100'; PERFHETERO='4'; PERFAUTONOMOUS='1'
+            HETEROSCHED='5'
             PROCTHROTTLEMIN='5'; PROCTHROTTLEMAX='100'
             THROTTLEMIN_EC1='5'; THROTTLEMAX_EC1='100'
             PERFINCPOL='0'; PERFDECPOL='0'
             PERFINCTHRESHOLD='60'; PERFDECTHRESHOLD='20'
-            PERFLATENCYSENSITIVITY='50'
+            PERFLATENCYSENSITIVITY='99'
             SYSCOOLING='1'; ALLOWTHROTTLE='2'; IDLEDISABLE='0'
             MAXFREQ='0'; PERFRESOURCEPRIORITY='100'
         }
         DC = @{
-            PERFBOOSTMODE='1'; PERFBOOSTPOL='1'; PERFEPP='70'; PERFEPP1='70'
-            CPMINCORES='50'; CPMAXCORES='100'; PERFHETERO='0'; PERFAUTONOMOUS='1'
+            PERFBOOSTMODE='1'; PERFBOOSTPOL='30'; PERFEPP='60'; PERFEPP1='60'
+            CPMINCORES='50'; CPMAXCORES='100'; PERFHETERO='4'; PERFAUTONOMOUS='1'
+            HETEROSCHED='5'
             PROCTHROTTLEMIN='5'; PROCTHROTTLEMAX='80'
             THROTTLEMIN_EC1='5'; THROTTLEMAX_EC1='80'
             PERFINCPOL='0'; PERFDECPOL='0'
-            PERFLATENCYSENSITIVITY='50'
+            PERFINCTHRESHOLD='60'; PERFDECTHRESHOLD='20'
+            PERFLATENCYSENSITIVITY='99'
             SYSCOOLING='1'; ALLOWTHROTTLE='2'; IDLEDISABLE='0'; MAXFREQ='0'
+            PERFRESOURCEPRIORITY='100'
         }
     }
 
@@ -238,28 +255,30 @@ $Script:Profiles = @{
         Title = '极致版(游戏/渲染/低延迟)'
         Clone = 'PSE-Extreme'
         AC = @{
-            PERFBOOSTMODE='2'; PERFBOOSTPOL='2'; PERFEPP='0'; PERFEPP1='0'
+            PERFBOOSTMODE='2'; PERFBOOSTPOL='100'; PERFEPP='0'; PERFEPP1='0'
             CPMINCORES='100'; CPMAXCORES='100'
-            CPCONCURRENCY='100'; CPHEADROOM='100'; CPLATENCYHINTUNPARK='100'
-            PERFHETERO='4'; PERFAUTONOMOUS='0'
-            PROCTHROTTLEMIN='100'; PROCTHROTTLEMAX='100'
-            THROTTLEMIN_EC1='100'; THROTTLEMAX_EC1='100'
-            PERFINCPOL='2'; PERFDECPOL='0'
-            PERFINCTHRESHOLD='20'; PERFDECTHRESHOLD='60'
-            PERFLATENCYSENSITIVITY='100'
-            IDLEDISABLE='0'; SYSCOOLING='1'; ALLOWTHROTTLE='2'
-            DUTYCYCLING='0'; MAXFREQ='0'; PERFRESOURCEPRIORITY='100'
-        }
-        DC = @{
-            PERFBOOSTMODE='2'; PERFBOOSTPOL='2'; PERFEPP='10'; PERFEPP1='10'
-            CPMINCORES='100'; CPMAXCORES='100'
-            CPCONCURRENCY='100'; CPHEADROOM='100'; CPLATENCYHINTUNPARK='100'
-            PERFHETERO='4'; PERFAUTONOMOUS='0'
+            CPCONCURRENCY='95'; CPHEADROOM='0'; CPLATENCYHINTUNPARK='100'
+            PERFHETERO='4'; PERFAUTONOMOUS='1'; HETEROSCHED='2'
             PROCTHROTTLEMIN='50'; PROCTHROTTLEMAX='100'
             THROTTLEMIN_EC1='50'; THROTTLEMAX_EC1='100'
             PERFINCPOL='2'; PERFDECPOL='0'
+            PERFINCTHRESHOLD='30'; PERFDECTHRESHOLD='10'
             PERFLATENCYSENSITIVITY='100'
-            SYSCOOLING='1'; ALLOWTHROTTLE='2'; MAXFREQ='0'
+            IDLEDISABLE='0'; SYSCOOLING='1'; ALLOWTHROTTLE='0'
+            DUTYCYCLING='0'; MAXFREQ='0'; PERFRESOURCEPRIORITY='100'
+        }
+        DC = @{
+            PERFBOOSTMODE='2'; PERFBOOSTPOL='100'; PERFEPP='10'; PERFEPP1='10'
+            CPMINCORES='100'; CPMAXCORES='100'
+            CPCONCURRENCY='95'; CPHEADROOM='0'; CPLATENCYHINTUNPARK='100'
+            PERFHETERO='4'; PERFAUTONOMOUS='1'; HETEROSCHED='2'
+            PROCTHROTTLEMIN='50'; PROCTHROTTLEMAX='100'
+            THROTTLEMIN_EC1='50'; THROTTLEMAX_EC1='100'
+            PERFINCPOL='2'; PERFDECPOL='0'
+            PERFINCTHRESHOLD='30'; PERFDECTHRESHOLD='10'
+            PERFLATENCYSENSITIVITY='100'
+            SYSCOOLING='1'; ALLOWTHROTTLE='0'; IDLEDISABLE='0'; MAXFREQ='0'
+            DUTYCYCLING='0'; PERFRESOURCEPRIORITY='100'
         }
     }
 
@@ -267,24 +286,28 @@ $Script:Profiles = @{
         Title = '节能版(续航/移动办公)'
         Clone = 'PSE-Eco'
         AC = @{
-            PERFBOOSTMODE='1'; PERFBOOSTPOL='1'; PERFEPP='80'; PERFEPP1='80'
-            CPMINCORES='50'; CPMAXCORES='100'; PERFHETERO='0'; PERFAUTONOMOUS='1'
+            PERFBOOSTMODE='1'; PERFBOOSTPOL='0'; PERFEPP='80'; PERFEPP1='80'
+            CPMINCORES='50'; CPMAXCORES='100'; PERFHETERO='4'; PERFAUTONOMOUS='1'
+            HETEROSCHED='5'
             PROCTHROTTLEMIN='5'; PROCTHROTTLEMAX='85'
             THROTTLEMIN_EC1='5'; THROTTLEMAX_EC1='85'
-            PERFINCPOL='0'; PERFDECPOL='1'
+            PERFINCPOL='1'; PERFDECPOL='2'
             PERFINCTHRESHOLD='60'; PERFDECTHRESHOLD='20'
             PERFLATENCYSENSITIVITY='0'
-            SYSCOOLING='1'; ALLOWTHROTTLE='2'; IDLEDISABLE='0'
+            SYSCOOLING='0'; ALLOWTHROTTLE='2'; IDLEDISABLE='0'
             MAXFREQ='0'; PERFRESOURCEPRIORITY='100'
         }
         DC = @{
             PERFBOOSTMODE='0'; PERFBOOSTPOL='0'; PERFEPP='100'; PERFEPP1='100'
-            CPMINCORES='70'; CPMAXCORES='100'; PERFHETERO='0'; PERFAUTONOMOUS='1'
+            CPMINCORES='70'; CPMAXCORES='100'; PERFHETERO='4'; PERFAUTONOMOUS='1'
+            HETEROSCHED='5'
             PROCTHROTTLEMIN='5'; PROCTHROTTLEMAX='60'
             THROTTLEMIN_EC1='5'; THROTTLEMAX_EC1='60'
-            PERFINCPOL='0'; PERFDECPOL='1'
+            PERFINCPOL='1'; PERFDECPOL='2'
+            PERFINCTHRESHOLD='60'; PERFDECTHRESHOLD='20'
             PERFLATENCYSENSITIVITY='0'
-            SYSCOOLING='1'; ALLOWTHROTTLE='2'; IDLEDISABLE='1'; MAXFREQ='0'
+            SYSCOOLING='0'; ALLOWTHROTTLE='2'; IDLEDISABLE='0'; MAXFREQ='0'
+            PERFRESOURCEPRIORITY='100'
         }
     }
 }
@@ -323,9 +346,29 @@ function Write-TuneLog {
 }
 
 function Invoke-PowerCfg {
-    param([Parameter(Mandatory)][string[]]$Arguments)
-    $out = & powercfg.exe @Arguments 2>&1
-    [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); Output = ($out -join "`n") }
+    <#
+      调用 powercfg.exe。注意：在 Windows PowerShell 5.1 下，
+      当 $ErrorActionPreference='Stop' 时 `2>&1` 会把 stderr 变成终止异常，
+      导致所有 `if (-not $r.Ok)` 兜底逻辑变成死代码。这里在函数作用域内
+      临时切到 'Continue'，把 stderr 当普通输出收集，并显式记录退出码。
+    #>
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [switch]$Quiet          # 抑制日志输出（不影响返回值）
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out  = & powercfg.exe @Arguments 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    [pscustomobject]@{
+        Ok     = ($code -eq 0)
+        Code   = $code
+        Output = ($out -join "`n")
+    }
 }
 
 #endregion
@@ -413,13 +456,29 @@ function Get-WritableSettings { $Script:Writable }
 
 function Get-HardwareProfile {
     <#  探测硬件特征，用于自动选档  #>
-    $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
-    $cs  = Get-CimInstance Win32_ComputerSystem
-    $os  = Get-CimInstance Win32_OperatingSystem
+    $cpu = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cs  = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $os  = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $se  = Get-CimInstance Win32_SystemEnclosure -ErrorAction SilentlyContinue
 
-    # 排除 WMI 中名为 "Notebook" 的伪电池设备
-    $bats = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue |
-              Where-Object { $_.DeviceID -notlike '*Notebook*' -and $_.DeviceID -notlike '*Microsoft*' })
+    # 笔记本判定：优先用 PCSystemType(2=Mobile) 与机箱类型，
+    # 不要用 Win32_Battery 的设备名过滤——很多 OEM 的电池 DeviceID 形如
+    # "0001NotebookBAT"，会被 *Notebook* 规则误杀，把笔记本判成台式机。
+    $isLaptop = $false
+    if ($cs -and $cs.PCSystemType -eq 2) { $isLaptop = $true }
+    if (-not $isLaptop -and $se) {
+        # 8=Portable 9=Laptop 10=Notebook 11=Handheld 12=Docking 14=SubNotebook 30=Tablet 31=Convertible 32=Detachable
+        $mobile = @(8, 9, 10, 11, 14, 30, 31, 32)
+        foreach ($ct in @($se.ChassisTypes)) {
+            if ($mobile -contains [int]$ct) { $isLaptop = $true; break }
+        }
+    }
+    if (-not $isLaptop) {
+        # 最后兜底：存在真实电池（排除 UPS / 虚拟电池）
+        $bats = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue |
+                  Where-Object { $_.BatteryStatus -ne 3 -and $_.EstimatedChargeRemaining -gt 0 })
+        if ($bats.Count -gt 0) { $isLaptop = $true }
+    }
 
     $nvme = $false
     try {
@@ -427,10 +486,10 @@ function Get-HardwareProfile {
                   Where-Object { $_.BusType -eq 'NVMe' }).Count -gt 0
     } catch { }
 
-    $isVM = ($cs.Model -match 'Virtual|VMware|KVM|Hyper-V|Parallels') -or
-            ($cs.Manufacturer -match 'VMware' -and $cs.Model -match 'Virtual')
+    $isVM = ($cs -and $cs.Model -match 'Virtual|VMware|KVM|Hyper-V|Parallels') -or
+            ($cs -and $cs.Manufacturer -match 'VMware' -and $cs.Model -match 'Virtual')
 
-    $name = [string]$cpu.Name
+    $name = if ($cpu) { [string]$cpu.Name } else { 'Unknown' }
     # 大小核：12 代及以后 Intel 桌面/移动、Core Ultra、骁龙 X
     $hetero = ($name -match 'Core Ultra') -or
               ($name -match 'i[3579]-1[2-9]\d{3}') -or
@@ -438,24 +497,32 @@ function Get-HardwareProfile {
 
     [pscustomobject]@{
         CPU      = $name
-        Cores    = [int]$cpu.NumberOfCores
-        Logical  = [int]$cpu.NumberOfLogicalProcessors
+        Cores    = if ($cpu) { [int]$cpu.NumberOfCores } else { 0 }
+        Logical  = if ($cpu) { [int]$cpu.NumberOfLogicalProcessors } else { 0 }
         Hetero   = $hetero
         NVMe     = $nvme
-        IsLaptop = ($bats.Count -gt 0)
+        IsLaptop = $isLaptop
         IsVM     = $isVM
-        RAMGB    = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
-        OS       = $os.Caption
+        RAMGB    = if ($cs) { [math]::Round($cs.TotalPhysicalMemory / 1GB, 1) } else { 0 }
+        OS       = if ($os) { $os.Caption } else { '' }
     }
 }
 
 function Resolve-Profile {
-    <#  按硬件特征自动选档  #>
+    <#
+      按硬件特征自动选档。
+      注意：大小核笔记本**不能**选 max-perf——极致版会锁最小状态并禁止核心停放，
+      在散热受限的轻薄本上反而触发温度墙降频（见 README「已知限制」）。
+      因此笔记本判定必须排在异类核判定之前。
+    #>
     param($Hw)
-    if ($Hw.IsVM)                               { return 'balanced-stable' }
-    if ($Hw.Hetero -and $Hw.Cores -ge 10)       { return 'max-perf' }
-    if ($Hw.Cores -ge 8 -and -not $Hw.IsLaptop) { return 'max-perf' }
-    if ($Hw.IsLaptop -and $Hw.Cores -le 6)      { return 'eco' }
+    if ($Hw.IsVM)                                  { return 'balanced-stable' }
+    if ($Hw.IsLaptop) {
+        if ($Hw.Cores -le 6)                       { return 'eco' }
+        return 'balanced-stable'
+    }
+    if ($Hw.Hetero -and $Hw.Cores -ge 10)          { return 'max-perf' }
+    if ($Hw.Cores -ge 8)                           { return 'max-perf' }
     return 'balanced-stable'
 }
 
@@ -559,6 +626,16 @@ function Export-PowerSnapshot {
     }
     $snapshot | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $dir 'values.json') -Encoding UTF8
 
+    # 属性快照：PowerWriteSettingAttributes 没有方案参数，改的是全局隐藏位，
+    # 不记录下来就无法还原。必须在 Enable-HiddenSettings 之前采集。
+    $attrs = @{}
+    foreach ($name in $Script:Settings.Keys) {
+        $sg = Get-SettingSubGroup $name
+        $st = Get-SettingGuid $name
+        $attrs[$name] = [int][PwrNative]::Attributes($sg, $st)
+    }
+    $attrs | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $dir 'attributes.json') -Encoding UTF8
+
     $active = Get-ActiveScheme
     [pscustomobject]@{
         Tag          = $Tag
@@ -607,6 +684,24 @@ function Restore-SnapshotValues {
     return $n
 }
 
+function Restore-SnapshotAttributes {
+    <#  从备份目录的 attributes.json 还原设置的隐藏位（全局状态，需单独还原） #>
+    param([Parameter(Mandatory)][string]$BackupDir)
+    $f = Join-Path $BackupDir 'attributes.json'
+    if (-not (Test-Path $f)) { Write-TuneLog '备份中无 attributes.json，跳过属性还原' 'WARN'; return 0 }
+
+    $data = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
+    $n = 0; $fail = 0
+    foreach ($p in $data.PSObject.Properties) {
+        if (-not $Script:Settings.Contains($p.Name)) { continue }
+        $sg = Get-SettingSubGroup $p.Name
+        $st = Get-SettingGuid $p.Name
+        if ([PwrNative]::SetAttributes($sg, $st, [uint32]$p.Value) -eq 0) { $n++ } else { $fail++ }
+    }
+    Write-TuneLog "属性还原完成：成功 $n，失败 $fail" 'OK'
+    return $n
+}
+
 function Restore-PowerDefaults {
     Invoke-PowerCfg -Arguments @('-restoredefaultschemes') | Out-Null
     Write-TuneLog '已恢复 Windows 默认电源方案' 'OK'
@@ -636,7 +731,7 @@ function Get-ProfileDiff {
     }
 }
 
-function Apply-Profile {
+function Set-PowerProfile {
     <#  备份 → 克隆 → 取消隐藏 → 逐项写入(原生API) → 激活 → 回读校验 #>
     param(
         [Parameter(Mandatory)][ValidateSet('balanced-stable','max-perf','eco')][string]$ProfileKey,
@@ -663,11 +758,15 @@ function Apply-Profile {
     }
     $guid = New-PowerScheme -FriendlyName $p.Clone -BaseGuid $base
 
-    $ok = 0; $fail = @()
+    $ok = 0; $fail = @(); $gated = @()
 
     Write-Host '── 交流(AC) ──' -ForegroundColor Yellow
     foreach ($name in ($p.AC.Keys | Sort-Object)) {
         $v = [int]$p.AC[$name]
+        if ($Script:Writable -notcontains $name) {
+            Write-TuneLog ("Skip  {0,-22} AC   未通过可写性验证，跳过" -f $name) 'SKIP'
+            $gated += "$name/AC"; continue
+        }
         if (Set-Value -Name $name -Value $v -Scope 'AC' -SchemeGuid $guid) {
             Write-TuneLog ("OK    {0,-22} AC = {1,-4} {2}" -f $name, $v, $Script:Settings[$name].Desc) 'OK'
             $ok++
@@ -681,6 +780,10 @@ function Apply-Profile {
         Write-Host "`n── 电池(DC) ──" -ForegroundColor Yellow
         foreach ($name in ($p.DC.Keys | Sort-Object)) {
             $v = [int]$p.DC[$name]
+            if ($Script:Writable -notcontains $name) {
+                Write-TuneLog ("Skip  {0,-22} DC   未通过可写性验证，跳过" -f $name) 'SKIP'
+                $gated += "$name/DC"; continue
+            }
             if (Set-Value -Name $name -Value $v -Scope 'DC' -SchemeGuid $guid) {
                 Write-TuneLog ("OK    {0,-22} DC = {1,-4} {2}" -f $name, $v, $Script:Settings[$name].Desc) 'OK'
                 $ok++
@@ -693,11 +796,22 @@ function Apply-Profile {
         Write-Host "`n（未指定 -IncludeDC：电池档保持基底方案默认）" -ForegroundColor DarkGray
     }
 
+    # 一项都没写成功说明配置与本机完全不匹配，此时激活克隆方案等于把系统
+    # 换成一个残缺方案。拒绝激活并报错，让调用方知道没生效。
+    if ($ok -eq 0) {
+        Write-TuneLog "配置档 $ProfileKey 未成功写入任何设置，拒绝激活方案 $guid" 'ERROR'
+        throw "配置档 $ProfileKey 写入 0 项，已中止激活（备份保留在 $($p.Clone) 克隆前的快照）。"
+    }
+
     if (-not $NoActivate) { Set-ActiveScheme -SchemeGuid $guid }
 
-    Write-Host "`n完成：写入并校验通过 $ok 项，失败 $(@($fail).Count) 项。" -ForegroundColor Green
+    $lvl = if (@($fail).Count -gt 0) { 'WARN' } else { 'OK' }
+    Write-TuneLog "完成：写入并校验通过 $ok 项，失败 $(@($fail).Count) 项，跳过 $(@($gated).Count) 项。" $lvl
     if (@($fail).Count -gt 0) {
         Write-Host "失败项: $($fail -join ', ')" -ForegroundColor DarkGray
+    }
+    if (@($gated).Count -gt 0) {
+        Write-Host "跳过项（未通过可写性验证）: $($gated -join ', ')" -ForegroundColor DarkGray
     }
 
     [pscustomobject]@{
@@ -707,9 +821,14 @@ function Apply-Profile {
         Applied    = $ok
         Failed     = @($fail).Count
         FailedList = @($fail)
+        Gated      = @($gated).Count
+        GatedList  = @($gated)
     }
 }
 
 #endregion
 
-Export-ModuleMember -Function *
+# 兼容旧名：Apply-Profile 不是经批准的动词，会让每次 Import-Module 产生警告
+Set-Alias -Name Apply-Profile -Value Set-PowerProfile -Scope Script
+
+Export-ModuleMember -Function * -Alias *
